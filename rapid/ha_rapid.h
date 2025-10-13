@@ -112,6 +112,9 @@ class ha_rapid : public handler {
   int unload_table(const char *db_name, const char *table_name,
                    bool error_if_not_loaded) override;
 
+  std::string escape_string(std::string in);
+
+                    
   THR_LOCK_DATA m_lock;
 };
 

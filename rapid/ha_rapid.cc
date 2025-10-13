@@ -207,6 +207,24 @@ THR_LOCK_DATA **ha_rapid::store_lock(THD *, THR_LOCK_DATA **to,
   return to;
 }
 
+std::string ha_rapid::escape_string(std::string in) {
+  std::string out = "";
+  for(int i=0;i<in.length();++i) {
+    switch(in[i]) {
+      /*case '\0':
+        out += "\\0";
+        break;*/
+      case '\'':
+        out += "\\'";
+        break;
+      default:
+        out += in[i];
+        break;  
+    }
+  }
+  return out;
+}
+
 int ha_rapid::load_table(const TABLE &table_arg,
                         bool *skip_metadata_update [[maybe_unused]]) {
   assert(table_arg.file != nullptr);
@@ -233,6 +251,7 @@ int ha_rapid::load_table(const TABLE &table_arg,
     my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
              "Could not connect to DuckDB database");    
   }
+
   std::string create_table_query = "";
 
   for (Field **field = table_arg.field; *field; field++) {
@@ -334,31 +353,27 @@ int ha_rapid::load_table(const TABLE &table_arg,
     
   }
   std::string drop_table_query = "DROP TABLE IF EXISTS " +
-                                 std::string(table_arg.s->db.str) + "." +
+                                 std::string(table_arg.s->db.str) + "_" +
                                  std::string(table_arg.s->table_name.str);
 
   create_table_query = "CREATE TABLE " +
-                        std::string(table_arg.s->db.str) + "." +
+                        std::string(table_arg.s->db.str) + "_" +
                         std::string(table_arg.s->table_name.str) +
                         "\n(\n" + create_table_query + "\n)\n";
                         
-  std::cout << drop_table_query << std::endl;
-
   if (duckdb_query(con, drop_table_query.c_str(), nullptr) == DuckDBError) {
     // handle error
     my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
              "Could not drop table in DuckDB");
   }
   
-  std::cout << create_table_query << std::endl;
-
   if (duckdb_query(con, create_table_query.c_str(), nullptr) == DuckDBError) {
     // handle error
+    
     my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
              "Could not create table in DuckDB");
-  }
-
-  std::cout << "Created table in DuckDB" << std::endl;
+  } 
+  
   auto res = table_arg.file->ha_rnd_init(true); 
 
   // Make the Field::ptr pointers valid by copying the row into record[0]
@@ -379,23 +394,25 @@ int ha_rapid::load_table(const TABLE &table_arg,
     
       String tmp;
       auto s = (*field)->val_str(&tmp);
-      insert_query += "'" + std::string(s->ptr(), s->length()) + "'";
+      if((*field)->str_needs_quotes()) {
+        insert_query += "e'"+ escape_string(std::string(s->ptr(), s->length())) + "'";
+      } else {
+        insert_query += std::string(s->ptr(), s->length());
+      }
+      
     }
     insert_query = "INSERT INTO " +
-                    std::string(table_arg.s->db.str) + "." +
+                    std::string(table_arg.s->db.str) + "_" +
                     std::string(table_arg.s->table_name.str) +
                     " VALUES (" + insert_query + ")";
     
-    std::cout << insert_query << std::endl;
-
     if (duckdb_query(con, insert_query.c_str(), nullptr) == DuckDBError) {
       // handle error
       my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
                 "Could not insert data into table in DuckDB");
-    }
-
+    }     
   }
-  std::cout << "Inserted data into table in DuckDB" << std::endl;
+  
   table_arg.file->ha_rnd_end();
   // cleanup
   duckdb_disconnect(&con);
