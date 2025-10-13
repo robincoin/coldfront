@@ -365,14 +365,8 @@ int ha_rapid::load_table(const TABLE &table_arg,
              table_arg.s->table_name.str);
     return HA_ERR_KEY_NOT_FOUND;
   }
-  duckdb_database db;
-  duckdb_connection con;
 
-  if (duckdb_open("rapid.duckdb", &db) == DuckDBError) {
-    my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
-             "Could not open DuckDB database");
-    return HA_ERR_GENERIC;
-  }
+  duckdb_connection con;
 
   if (duckdb_connect(db, &con) == DuckDBError) {
     // handle error
@@ -392,12 +386,11 @@ int ha_rapid::load_table(const TABLE &table_arg,
     std::string insert_query = "";
                                 
     for (Field **field = table_arg.field; *field; field++) {
-      char attribute_buffer[1024];
-      String attribute(attribute_buffer, sizeof(attribute_buffer), &my_charset_bin);
-      
+            
       if (insert_query != "") {
         insert_query += ", ";
       }
+      
       if ((*field)->is_null()) {
         insert_query += "NULL";
         continue;
@@ -427,7 +420,7 @@ int ha_rapid::load_table(const TABLE &table_arg,
   table_arg.file->ha_rnd_end();
   // cleanup
   duckdb_disconnect(&con);
-  duckdb_close(&db);
+  
   return 0;
 }
 
@@ -439,13 +432,8 @@ int ha_rapid::unload_table(const char *db_name, const char *table_name,
              "Table is not loaded on a secondary engine");
     return 1;
   } else {
-    duckdb_database db;
+    
     duckdb_connection con;
-
-    if (duckdb_open("rapid.duckdb", &db) == DuckDBError) {
-      my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
-               "Could not open DuckDB database");
-    }
 
     if (duckdb_connect(db, &con) == DuckDBError) {
       // handle error
@@ -460,7 +448,7 @@ int ha_rapid::unload_table(const char *db_name, const char *table_name,
     }
     // cleanup
     duckdb_disconnect(&con);
-    duckdb_close(&db);
+    
   }
   loaded_tables->erase(db_name, table_name);
   my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
@@ -640,12 +628,18 @@ static int Init(MYSQL_PLUGIN p) {
   hton->secondary_engine_flags =
       MakeSecondaryEngineFlags(SecondaryEngineFlag::SUPPORTS_HASH_JOIN);
   hton->secondary_engine_modify_access_path_cost = ModifyAccessPathCost;
+
+  if (duckdb_open(":memory:", &db) == DuckDBError) {
+    my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
+             "Could not open DuckDB database");
+  }  
   return 0;
 }
 
 static int Deinit(MYSQL_PLUGIN) {
   delete loaded_tables;
   loaded_tables = nullptr;
+  duckdb_close(&db);
   return 0;
 }
 

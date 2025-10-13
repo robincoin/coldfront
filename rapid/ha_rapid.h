@@ -58,6 +58,8 @@ class ha_rapid : public handler {
   ha_rapid(handlerton *hton, TABLE_SHARE *table_share);
 
  private:
+  duckdb_database db;
+
   int create(const char *, TABLE *, HA_CREATE_INFO *, dd::Table *) override {
     return HA_ERR_WRONG_COMMAND;
   }
