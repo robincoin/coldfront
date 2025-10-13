@@ -225,33 +225,7 @@ std::string ha_rapid::escape_string(std::string in) {
   return out;
 }
 
-int ha_rapid::load_table(const TABLE &table_arg,
-                        bool *skip_metadata_update [[maybe_unused]]) {
-  assert(table_arg.file != nullptr);
-  
-  loaded_tables->add(table_arg.s->db.str, table_arg.s->table_name.str);
-  
-  if (loaded_tables->get(table_arg.s->db.str, table_arg.s->table_name.str) ==
-      nullptr) {
-    my_error(ER_NO_SUCH_TABLE, MYF(0), table_arg.s->db.str,
-             table_arg.s->table_name.str);
-    return HA_ERR_KEY_NOT_FOUND;
-  }
-  duckdb_database db;
-  duckdb_connection con;
-
-  if (duckdb_open("rapid.duckdb", &db) == DuckDBError) {
-    my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
-             "Could not open DuckDB database");
-    return HA_ERR_GENERIC;
-  }
-
-  if (duckdb_connect(db, &con) == DuckDBError) {
-    // handle error
-    my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
-             "Could not connect to DuckDB database");    
-  }
-
+int ha_rapid::create_duckdb_table(const TABLE &table_arg, duckdb_connection con) {
   std::string create_table_query = "";
 
   for (Field **field = table_arg.field; *field; field++) {
@@ -365,6 +339,7 @@ int ha_rapid::load_table(const TABLE &table_arg,
     // handle error
     my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
              "Could not drop table in DuckDB");
+    return HA_ERR_GENERIC;
   }
   
   if (duckdb_query(con, create_table_query.c_str(), nullptr) == DuckDBError) {
@@ -372,8 +347,44 @@ int ha_rapid::load_table(const TABLE &table_arg,
     
     my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
              "Could not create table in DuckDB");
-  } 
+    return HA_ERR_GENERIC;
+  }
+
+  return 0;
+}
+
+int ha_rapid::load_table(const TABLE &table_arg,
+                        bool *skip_metadata_update [[maybe_unused]]) {
+  assert(table_arg.file != nullptr);
   
+  loaded_tables->add(table_arg.s->db.str, table_arg.s->table_name.str);
+  
+  if (loaded_tables->get(table_arg.s->db.str, table_arg.s->table_name.str) ==
+      nullptr) {
+    my_error(ER_NO_SUCH_TABLE, MYF(0), table_arg.s->db.str,
+             table_arg.s->table_name.str);
+    return HA_ERR_KEY_NOT_FOUND;
+  }
+  duckdb_database db;
+  duckdb_connection con;
+
+  if (duckdb_open("rapid.duckdb", &db) == DuckDBError) {
+    my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
+             "Could not open DuckDB database");
+    return HA_ERR_GENERIC;
+  }
+
+  if (duckdb_connect(db, &con) == DuckDBError) {
+    // handle error
+    my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
+             "Could not connect to DuckDB database");    
+    return HA_ERR_GENERIC;
+  }
+
+  if(create_duckdb_table(table_arg, con)) {
+    return HA_ERR_GENERIC;
+  }
+
   auto res = table_arg.file->ha_rnd_init(true); 
 
   // Make the Field::ptr pointers valid by copying the row into record[0]

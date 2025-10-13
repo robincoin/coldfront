@@ -27,6 +27,7 @@
 #include "my_base.h"
 #include "sql/handler.h"
 #include "thr_lock.h"
+#include "duckdb.hpp"
 
 class THD;
 struct TABLE;
@@ -113,6 +114,7 @@ class ha_rapid : public handler {
                    bool error_if_not_loaded) override;
 
   std::string escape_string(std::string in);
+  int create_duckdb_table(const TABLE &table, duckdb_connection con);
 
                     
   THR_LOCK_DATA m_lock;
