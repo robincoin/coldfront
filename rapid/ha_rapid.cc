@@ -27,12 +27,14 @@
 #include <stddef.h>
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "lex_string.h"
 #include "my_alloc.h"
@@ -456,6 +458,456 @@ int ha_rapid::unload_table(const char *db_name, const char *table_name,
   return 0;
 }
 
+/**
+  Convert a LEX* into the SQL string that originated the AST.
+  
+  This function retrieves the original SQL query string that was parsed to create
+  the LEX AST. The original query is stored in the THD (Thread Descriptor) object
+  that is associated with the LEX.
+  
+  @param lex The LEX object containing the parsed AST
+  @return The original SQL query string as a LEX_CSTRING, or NULL_CSTR if invalid
+  
+  @note The returned string is the original query as entered by the user,
+        before any rewriting or normalization. For rewritten queries, use
+        thd->rewritten_query() instead.
+        
+  @example
+    LEX *lex = thd->lex;
+    LEX_CSTRING original_sql = lex_to_sql_string(lex);
+    if (original_sql.str != nullptr) {
+      printf("Original SQL: %.*s\n", (int)original_sql.length, original_sql.str);
+    }
+*/
+LEX_CSTRING lex_to_sql_string(LEX *lex) {
+  if (lex == nullptr || lex->thd == nullptr) {
+    return NULL_CSTR;
+  }
+  
+  // The original SQL query string is stored in THD::m_query_string
+  // and can be accessed via thd->query()
+  return lex->thd->query();
+}
+
+/**
+  Reconstruct SQL from LEX AST with DuckDB-compatible table name transformation.
+  
+  This function traverses the LEX AST and reconstructs the SQL query, transforming
+  schema.table references to schema_table format for DuckDB compatibility.
+  It also uses table aliases in SELECT clauses instead of full table names.
+  
+  @param lex The LEX object containing the parsed AST
+  @return The reconstructed SQL query as a std::string, or empty string if invalid
+  
+  @note This function handles SELECT, INSERT, UPDATE, DELETE statements and
+        transforms table references from SCHEMA.TABLE to SCHEMA_TABLE format.
+        It also replaces full table names with aliases in SELECT clauses.
+        
+  @example
+    LEX *lex = thd->lex;
+    std::string reconstructed_sql = lex_to_duckdb_sql(lex);
+    std::cout << "DuckDB SQL: " << reconstructed_sql << std::endl;
+*/
+std::string lex_to_duckdb_sql(LEX *lex) {
+  if (lex == nullptr || lex->thd == nullptr) {
+    return "";
+  }
+  
+  String sql_buffer;
+  THD *thd = lex->thd;
+  
+  // Use MySQL's built-in print functionality to reconstruct the SQL
+  // This handles all the complex cases like subqueries, joins, etc.
+  if (lex->unit != nullptr) {
+    lex->unit->print(thd, &sql_buffer, QT_ORDINARY);
+  } else if (lex->query_block != nullptr) {
+    lex->query_block->print(thd, &sql_buffer, QT_ORDINARY);
+  } else {
+    return "";
+  }
+  
+  std::string result = std::string(sql_buffer.ptr(), sql_buffer.length());
+  
+  // First, collect table aliases from the LEX
+  std::map<std::string, std::string> table_aliases = collect_table_aliases(lex);
+  
+  // Replace full table names with aliases in SELECT clauses FIRST (before transformation)
+  std::string sql_with_aliases = replace_table_names_with_aliases(result, table_aliases);
+  
+  // Then transform schema.table references to schema_table format and add implicit aliases
+  std::string transformed_sql = transform_table_references_with_aliases(sql_with_aliases, table_aliases);
+  
+  // Strip backticks from SELECT clauses for DuckDB compatibility
+  std::string duckdb_compatible_sql = strip_backticks_from_select(transformed_sql);
+  
+  return duckdb_compatible_sql;
+}
+
+/**
+  Transform table references from SCHEMA.TABLE to SCHEMA_TABLE format in FROM clauses.
+  
+  This function specifically targets table names in FROM clauses, JOIN clauses, and
+  other table reference contexts, while preserving dots in other parts of the SQL
+  like column references, decimal numbers, function calls, etc.
+  
+  @param sql The original SQL string
+  @return The transformed SQL string with DuckDB-compatible table names
+*/
+std::string transform_table_references(const std::string& sql) {
+  std::string result = sql;
+  
+  // Keywords that indicate table reference contexts
+  std::vector<std::string> table_context_keywords = {
+    "FROM", "JOIN", "INTO", "UPDATE", "TABLE", "ON", "USING"
+  };
+  
+  // Convert to uppercase for case-insensitive matching
+  std::string upper_sql = result;
+  std::transform(upper_sql.begin(), upper_sql.end(), upper_sql.begin(), ::toupper);
+  
+  size_t pos = 0;
+  while ((pos = result.find('.', pos)) != std::string::npos) {
+    // Look backwards to find the start of the identifier
+    size_t start = pos;
+    while (start > 0 && (std::isalnum(result[start - 1]) || result[start - 1] == '_' || 
+                        result[start - 1] == '`' || result[start - 1] == '"')) {
+      start--;
+    }
+    
+    // Look forwards to find the end of the identifier
+    size_t end = pos + 1;
+    while (end < result.length() && (std::isalnum(result[end]) || result[end] == '_' || 
+                                    result[end] == '`' || result[end] == '"')) {
+      end++;
+    }
+    
+    // Check if this looks like a schema.table pattern
+    if (start < pos && end > pos + 1) {
+      // Check if we're in a table reference context
+      bool in_table_context = false;
+      
+      // Look backwards to find the nearest keyword
+      size_t context_start = start;
+      while (context_start > 0 && result[context_start - 1] != ';' && 
+             result[context_start - 1] != '\n') {
+        context_start--;
+      }
+      
+      // Extract the context around this position
+      std::string context = upper_sql.substr(context_start, start - context_start);
+      
+      // Check if any table context keyword appears before this position
+      for (const auto& keyword : table_context_keywords) {
+        size_t keyword_pos = context.find(keyword);
+        if (keyword_pos != std::string::npos) {
+          // Make sure it's a whole word (not part of another word)
+          size_t keyword_end = keyword_pos + keyword.length();
+          if ((keyword_pos == 0 || !std::isalnum(context[keyword_pos - 1])) &&
+              (keyword_end >= context.length() || !std::isalnum(context[keyword_end]))) {
+            in_table_context = true;
+            break;
+          }
+        }
+      }
+      
+      // Only transform if we're in a table reference context
+      if (in_table_context) {
+        std::string before_dot = result.substr(start, pos - start);
+        std::string after_dot = result.substr(pos + 1, end - pos - 1);
+        
+        // Remove backticks/quotes if present
+        if (before_dot.length() >= 2 && before_dot.front() == '`' && before_dot.back() == '`') {
+          before_dot = before_dot.substr(1, before_dot.length() - 2);
+        }
+        if (after_dot.length() >= 2 && after_dot.front() == '`' && after_dot.back() == '`') {
+          after_dot = after_dot.substr(1, after_dot.length() - 2);
+        }
+        
+        // Replace with underscore format
+        std::string replacement = before_dot + "_" + after_dot;
+        result.replace(start, end - start, replacement);
+        pos = start + replacement.length();
+      } else {
+        pos++;
+      }
+    } else {
+      pos++;
+    }
+  }
+  
+  return result;
+}
+
+/**
+  Transform table references from SCHEMA.TABLE to SCHEMA_TABLE format and add implicit aliases.
+  
+  This function specifically targets table names in FROM clauses, JOIN clauses, and
+  other table reference contexts, while preserving dots in other parts of the SQL
+  like column references, decimal numbers, function calls, etc. It also adds
+  implicit aliases to tables that don't have explicit aliases.
+  
+  @param sql The original SQL string
+  @param table_aliases Map from full table names to their aliases
+  @return The transformed SQL string with DuckDB-compatible table names and implicit aliases
+*/
+std::string transform_table_references_with_aliases(const std::string& sql, 
+                                                  const std::map<std::string, std::string>& table_aliases) {
+  std::string result = sql;
+  
+  // Keywords that indicate table reference contexts
+  std::vector<std::string> table_context_keywords = {
+    "FROM", "JOIN", "INTO", "UPDATE", "TABLE", "ON", "USING"
+  };
+  
+  // Convert to uppercase for case-insensitive matching
+  std::string upper_sql = result;
+  std::transform(upper_sql.begin(), upper_sql.end(), upper_sql.begin(), ::toupper);
+  
+  size_t pos = 0;
+  while ((pos = result.find('.', pos)) != std::string::npos) {
+    // Look backwards to find the start of the identifier
+    size_t start = pos;
+    while (start > 0 && (std::isalnum(result[start - 1]) || result[start - 1] == '_' || 
+                        result[start - 1] == '`' || result[start - 1] == '"')) {
+      start--;
+    }
+    
+    // Look forwards to find the end of the identifier
+    size_t end = pos + 1;
+    while (end < result.length() && (std::isalnum(result[end]) || result[end] == '_' || 
+                                    result[end] == '`' || result[end] == '"')) {
+      end++;
+    }
+    
+    // Check if this looks like a schema.table pattern
+    if (start < pos && end > pos + 1) {
+      // Check if we're in a table reference context
+      bool in_table_context = false;
+      
+      // Look backwards to find the nearest keyword
+      size_t context_start = start;
+      while (context_start > 0 && result[context_start - 1] != ';' && 
+             result[context_start - 1] != '\n') {
+        context_start--;
+      }
+      
+      // Extract the context around this position
+      std::string context = upper_sql.substr(context_start, start - context_start);
+      
+      // Check if any table context keyword appears before this position
+      for (const auto& keyword : table_context_keywords) {
+        size_t keyword_pos = context.find(keyword);
+        if (keyword_pos != std::string::npos) {
+          // Make sure it's a whole word (not part of another word)
+          size_t keyword_end = keyword_pos + keyword.length();
+          if ((keyword_pos == 0 || !std::isalnum(context[keyword_pos - 1])) &&
+              (keyword_end >= context.length() || !std::isalnum(context[keyword_end]))) {
+            in_table_context = true;
+            break;
+          }
+        }
+      }
+      
+      // Only transform if we're in a table reference context
+      if (in_table_context) {
+        std::string before_dot = result.substr(start, pos - start);
+        std::string after_dot = result.substr(pos + 1, end - pos - 1);
+        
+        // Remove backticks/quotes if present
+        if (before_dot.length() >= 2 && before_dot.front() == '`' && before_dot.back() == '`') {
+          before_dot = before_dot.substr(1, before_dot.length() - 2);
+        }
+        if (after_dot.length() >= 2 && after_dot.front() == '`' && after_dot.back() == '`') {
+          after_dot = after_dot.substr(1, after_dot.length() - 2);
+        }
+        
+        // Build the transformed table name
+        std::string transformed_name = before_dot + "_" + after_dot;
+        
+        // Check if this table needs an implicit alias
+        std::string alias_to_add;
+        auto alias_it = table_aliases.find(transformed_name);
+        if (alias_it != table_aliases.end()) {
+          // Check if the alias is the same as the table name (implicit alias)
+          if (alias_it->second == after_dot) {
+            alias_to_add = " " + after_dot;
+          }
+        }
+        
+        // Replace with underscore format and add implicit alias if needed
+        std::string replacement = transformed_name + alias_to_add;
+        result.replace(start, end - start, replacement);
+        pos = start + replacement.length();
+      } else {
+        pos++;
+      }
+    } else {
+      pos++;
+    }
+  }
+  
+  return result;
+}
+
+/**
+  Collect table aliases from the LEX AST.
+  
+  @param lex The LEX object containing the parsed AST
+  @return A map from full table names to their aliases
+*/
+std::map<std::string, std::string> collect_table_aliases(LEX *lex) {
+  std::map<std::string, std::string> aliases;
+  
+  if (lex == nullptr || lex->query_block == nullptr) {
+    return aliases;
+  }
+  
+  // Traverse all table references in the query block
+  for (Table_ref *table = lex->query_block->get_table_list(); table != nullptr; 
+       table = table->next_local) {
+    
+    // Build the full table name
+    std::string full_table_name;
+    if (table->db != nullptr && table->table_name != nullptr) {
+      full_table_name = std::string(table->db) + "_" + std::string(table->table_name);
+    } else if (table->table_name != nullptr) {
+      full_table_name = std::string(table->table_name);
+    }
+    
+    if (!full_table_name.empty()) {
+      std::string alias;
+      
+      if (table->alias != nullptr) {
+        // Use explicit alias if provided
+        alias = std::string(table->alias);
+      } else if (table->table_name != nullptr) {
+        // Use table name as implicit alias when no explicit alias is provided
+        alias = std::string(table->table_name);
+      }
+      
+      if (!alias.empty()) {
+        aliases[full_table_name] = alias;
+      }
+    }
+  }
+  
+  return aliases;
+}
+
+/**
+  Replace full table names with aliases in SELECT clauses.
+  
+  @param sql The SQL string
+  @param table_aliases Map from full table names to aliases
+  @return The SQL string with table names replaced by aliases in SELECT clauses
+*/
+std::string replace_table_names_with_aliases(const std::string& sql, 
+                                           const std::map<std::string, std::string>& table_aliases) {
+  std::string result = sql;
+  
+  // Case-insensitive scan for SELECT ... FROM ranges
+  std::string upper_result = result;
+  std::transform(upper_result.begin(), upper_result.end(), upper_result.begin(), ::toupper);
+  size_t scan_pos = 0;
+  while (true) {
+    size_t select_pos = upper_result.find("SELECT", scan_pos);
+    if (select_pos == std::string::npos) break;
+    // Ensure we matched a word boundary on the left
+    if (select_pos > 0 && std::isalnum(static_cast<unsigned char>(upper_result[select_pos - 1]))) {
+      scan_pos = select_pos + 1;
+      continue;
+    }
+    size_t from_pos_upper = upper_result.find(" FROM ", select_pos);
+    if (from_pos_upper == std::string::npos) break;
+    // Extract using original casing
+    size_t select_start_content = select_pos + 6;
+    std::string select_clause = result.substr(select_start_content, from_pos_upper - select_start_content);
+    std::string modified_select = select_clause;
+
+    // Handle the original format (db.table.column) that MySQL's print() generates
+    for (const auto& alias_pair : table_aliases) {
+      const std::string& full_name = alias_pair.first;
+      const std::string& alias = alias_pair.second;
+
+      size_t underscore_pos = full_name.find('_');
+      if (underscore_pos != std::string::npos) {
+        std::string db_name = full_name.substr(0, underscore_pos);
+        std::string table_name = full_name.substr(underscore_pos + 1);
+
+        std::string original_pattern = "`" + db_name + "`.`" + table_name + "`.";
+        std::string replacement = "`" + alias + "`.";
+
+        size_t pos = 0;
+        while ((pos = modified_select.find(original_pattern, pos)) != std::string::npos) {
+          modified_select.replace(pos, original_pattern.length(), replacement);
+          pos += replacement.length();
+        }
+      }
+    }
+
+    if (modified_select != select_clause) {
+      // Apply replacement to original and rebuild upper copy to keep indices in sync
+      result.replace(select_start_content, from_pos_upper - select_start_content, modified_select);
+      upper_result = result;
+      std::transform(upper_result.begin(), upper_result.end(), upper_result.begin(), ::toupper);
+      // Move scan position to just after FROM to continue scanning
+      scan_pos = select_start_content + modified_select.length();
+    } else {
+      scan_pos = from_pos_upper + 6; // move past FROM
+    }
+  }
+  
+  return result;
+}
+
+/**
+  Strip backticks from SELECT clauses for DuckDB compatibility.
+  
+  DuckDB doesn't support backtick-quoted identifiers, so we need to remove them
+  from the SELECT clause while preserving them in other parts of the query.
+  
+  @param sql The SQL string
+  @return The SQL string with backticks removed from SELECT clauses
+*/
+std::string strip_backticks_from_select(const std::string& sql) {
+  std::string result = sql;
+  
+  // Case-insensitive scan for SELECT ... FROM ranges
+  std::string upper_result = result;
+  std::transform(upper_result.begin(), upper_result.end(), upper_result.begin(), ::toupper);
+  size_t scan_pos = 0;
+  while (true) {
+    size_t select_pos = upper_result.find("SELECT", scan_pos);
+    if (select_pos == std::string::npos) break;
+    if (select_pos > 0 && std::isalnum(static_cast<unsigned char>(upper_result[select_pos - 1]))) {
+      scan_pos = select_pos + 1;
+      continue;
+    }
+    size_t from_pos_upper = upper_result.find(" FROM ", select_pos);
+    if (from_pos_upper == std::string::npos) break;
+
+    size_t select_start_content = select_pos + 6;
+    std::string select_clause = result.substr(select_start_content, from_pos_upper - select_start_content);
+
+    std::string modified_select = select_clause;
+    size_t pos = 0;
+    while ((pos = modified_select.find('`', pos)) != std::string::npos) {
+      modified_select.erase(pos, 1);
+    }
+
+    if (modified_select != select_clause) {
+      result.replace(select_start_content, from_pos_upper - select_start_content, modified_select);
+      upper_result = result;
+      std::transform(upper_result.begin(), upper_result.end(), upper_result.begin(), ::toupper);
+      scan_pos = select_start_content + modified_select.length();
+    } else {
+      scan_pos = from_pos_upper + 6;
+    }
+  }
+  
+  return result;
+}
+
 }  // namespace rapid
 
 namespace {
@@ -538,6 +990,18 @@ static void AssertSupportedPath(const AccessPath *path) {
 static bool OptimizeSecondaryEngine(THD *thd [[maybe_unused]], LEX *lex) {
   // The context should have been set by PrepareSecondaryEngine.
   assert(lex->secondary_engine_execution_context() != nullptr);
+
+  // Example usage of SQL reconstruction functions
+  LEX_CSTRING original_sql = rapid::lex_to_sql_string(lex);
+  if (original_sql.str != nullptr) {
+    std::cout << "Original SQL: " << std::string(original_sql.str, original_sql.length) << std::endl;
+  }
+  
+  // Reconstruct SQL with DuckDB-compatible table names
+  std::string duckdb_sql = rapid::lex_to_duckdb_sql(lex);
+  if (!duckdb_sql.empty()) {
+    std::cout << "DuckDB SQL: " << duckdb_sql << std::endl;
+  }
 
   DBUG_EXECUTE_IF("secondary_engine_rapid_optimize_error", {
     my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0), "");
@@ -629,7 +1093,7 @@ static int Init(MYSQL_PLUGIN p) {
       MakeSecondaryEngineFlags(SecondaryEngineFlag::SUPPORTS_HASH_JOIN);
   hton->secondary_engine_modify_access_path_cost = ModifyAccessPathCost;
 
-  if (duckdb_open(":memory:", &db) == DuckDBError) {
+  if (duckdb_open(":memory:", &rapid::db) == DuckDBError) {
     my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
              "Could not open DuckDB database");
   }  
@@ -639,7 +1103,7 @@ static int Init(MYSQL_PLUGIN p) {
 static int Deinit(MYSQL_PLUGIN) {
   delete loaded_tables;
   loaded_tables = nullptr;
-  duckdb_close(&db);
+  duckdb_close(&rapid::db);
   return 0;
 }
 

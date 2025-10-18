@@ -28,10 +28,13 @@
 #include "sql/handler.h"
 #include "thr_lock.h"
 #include "duckdb.hpp"
+#include <map>
+#include <string>
 
 class THD;
 struct TABLE;
 struct TABLE_SHARE;
+struct LEX;
 
 namespace dd {
 class Table;
@@ -53,12 +56,13 @@ namespace rapid {
  * @note This rapid storage engine does not support being set as a primary
  * storage engine.
  */
+duckdb_database db;
+
 class ha_rapid : public handler {
  public:
   ha_rapid(handlerton *hton, TABLE_SHARE *table_share);
 
  private:
-  duckdb_database db;
 
   int create(const char *, TABLE *, HA_CREATE_INFO *, dd::Table *) override {
     return HA_ERR_WRONG_COMMAND;
@@ -121,6 +125,66 @@ class ha_rapid : public handler {
                     
   THR_LOCK_DATA m_lock;
 };
+
+/**
+  Convert a LEX* into the SQL string that originated the AST.
+  
+  @param lex The LEX object containing the parsed AST
+  @return The original SQL query string as a LEX_CSTRING, or NULL_CSTR if invalid
+*/
+LEX_CSTRING lex_to_sql_string(LEX *lex);
+
+/**
+  Reconstruct SQL from LEX AST with DuckDB-compatible table name transformation.
+  
+  @param lex The LEX object containing the parsed AST
+  @return The reconstructed SQL query as a std::string, or empty string if invalid
+*/
+std::string lex_to_duckdb_sql(LEX *lex);
+
+/**
+  Transform table references from SCHEMA.TABLE to SCHEMA_TABLE format.
+  
+  @param sql The original SQL string
+  @return The transformed SQL string with DuckDB-compatible table names
+*/
+std::string transform_table_references(const std::string& sql);
+
+/**
+  Transform table references from SCHEMA.TABLE to SCHEMA_TABLE format and add implicit aliases.
+  
+  @param sql The original SQL string
+  @param table_aliases Map from full table names to their aliases
+  @return The transformed SQL string with DuckDB-compatible table names and implicit aliases
+*/
+std::string transform_table_references_with_aliases(const std::string& sql, 
+                                                  const std::map<std::string, std::string>& table_aliases);
+
+/**
+  Collect table aliases from the LEX AST.
+  
+  @param lex The LEX object containing the parsed AST
+  @return A map from full table names to their aliases
+*/
+std::map<std::string, std::string> collect_table_aliases(LEX *lex);
+
+/**
+  Replace full table names with aliases in SELECT clauses.
+  
+  @param sql The SQL string
+  @param table_aliases Map from full table names to aliases
+  @return The SQL string with table names replaced by aliases in SELECT clauses
+*/
+std::string replace_table_names_with_aliases(const std::string& sql, 
+                                           const std::map<std::string, std::string>& table_aliases);
+
+/**
+  Strip backticks from SELECT clauses for DuckDB compatibility.
+  
+  @param sql The SQL string
+  @return The SQL string with backticks removed from SELECT clauses
+*/
+std::string strip_backticks_from_select(const std::string& sql);
 
 }  // namespace rapid
 
