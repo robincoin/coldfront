@@ -27,15 +27,23 @@ ADD_DEFINITIONS(-DMYSQL_SERVER)
 
 IF(WITH_RAPID_SECONDARY_STORAGE_ENGINE AND
     NOT WITHOUT_RAPID_SECONDARY_STORAGE_ENGINE)
-  MYSQL_ADD_PLUGIN(rapid ha_rapid.cc duckdb.cc
+  MYSQL_ADD_PLUGIN(rapid ha_rapid.cc duckdb.cc rapid_binlog_consumer.cc
     STORAGE_ENGINE
     DEFAULT
     LINK_LIBRARIES extra::rapidjson ext::zlib
     )
+  # Add include directories for binlog consumer code
+  TARGET_INCLUDE_DIRECTORIES(rapid PRIVATE
+    ${CMAKE_SOURCE_DIR}/extra/unordered_dense/unordered_dense-4.4.0/include
+    )
 ELSEIF(NOT WITHOUT_RAPID_SECONDARY_STORAGE_ENGINE)
-  MYSQL_ADD_PLUGIN(rapid ha_rapid.cc duckdb.cc
+  MYSQL_ADD_PLUGIN(rapid ha_rapid.cc duckdb.cc rapid_binlog_consumer.cc
     STORAGE_ENGINE
     MODULE_ONLY
     LINK_LIBRARIES extra::rapidjson ext::zlib
+    )
+  # Add include directories for binlog consumer code
+  TARGET_INCLUDE_DIRECTORIES(rapid PRIVATE
+    ${CMAKE_SOURCE_DIR}/extra/unordered_dense/unordered_dense-4.4.0/include
     )
 ENDIF()
