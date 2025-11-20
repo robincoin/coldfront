@@ -146,15 +146,71 @@ and (d_year = 1997 or d_year = 1998)
 ```
 ## explain plan
 ```
-+----+-------------+------------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------------------------------+
-| id | select_type | table      | partitions | type | possible_keys | key  | key_len | ref  | rows   | filtered | Extra                                                                      |
-+----+-------------+------------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------------------------------+
-|  1 | SIMPLE      | customer   | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 894062 |    10.00 | Using where; Using temporary; Using filesort; Using secondary engine RAPID |
-|  1 | SIMPLE      | lineorder2 | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 995121 |    10.00 | Using where; Using join buffer (hash join); Using secondary engine RAPID   |
-|  1 | SIMPLE      | dim_date   | NULL       | ALL  | NULL          | NULL | NULL    | NULL |   2556 |     1.90 | Using where; Using join buffer (hash join); Using secondary engine RAPID   |
-|  1 | SIMPLE      | supplier   | NULL       | ALL  | NULL          | NULL | NULL    | NULL |  59571 |     1.00 | Using where; Using join buffer (hash join); Using secondary engine RAPID   |
-|  1 | SIMPLE      | part       | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 993201 |     1.90 | Using where; Using join buffer (hash join); Using secondary engine RAPID   |
-+----+-------------+------------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------------------------------+
+*************************** 1. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: customer
+   partitions: NULL
+         type: ALL
+possible_keys: NULL
+          key: NULL
+      key_len: NULL
+          ref: NULL
+         rows: 894062
+     filtered: 10.00
+        Extra: Using where; Using temporary; Using filesort; Using secondary engine RAPID
+*************************** 2. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: lineorder
+   partitions: NULL
+         type: ALL
+possible_keys: NULL
+          key: NULL
+      key_len: NULL
+          ref: NULL
+         rows: 178556333
+     filtered: 10.00
+        Extra: Using where; Using join buffer (hash join); Using secondary engine RAPID
+*************************** 3. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: dim_date
+   partitions: NULL
+         type: ALL
+possible_keys: NULL
+          key: NULL
+      key_len: NULL
+          ref: NULL
+         rows: 2556
+     filtered: 1.90
+        Extra: Using where; Using join buffer (hash join); Using secondary engine RAPID
+*************************** 4. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: supplier
+   partitions: NULL
+         type: ALL
+possible_keys: NULL
+          key: NULL
+      key_len: NULL
+          ref: NULL
+         rows: 59571
+     filtered: 1.00
+        Extra: Using where; Using join buffer (hash join); Using secondary engine RAPID
+*************************** 5. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: part
+   partitions: NULL
+         type: ALL
+possible_keys: NULL
+          key: NULL
+      key_len: NULL
+          ref: NULL
+         rows: 993201
+     filtered: 1.90
+        Extra: Using where; Using join buffer (hash join); Using secondary engine RAPID
 5 rows in set, 1 warning (0.01 sec)
 ```
 
