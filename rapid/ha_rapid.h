@@ -42,20 +42,6 @@ class Table;
 
 namespace rapid {
 
-/**
- * The RAPID storage engine is used for testing MySQL server functionality
- * related to secondary storage engines.
- *
- * There are currently no secondary storage engines mature enough to be merged
- * into mysql-trunk. Therefore, this bare-minimum storage engine, with no
- * actual functionality and implementing only the absolutely necessary handler
- * interfaces to allow setting it as a secondary engine of a table, was created
- * to facilitate pushing MySQL server code changes to mysql-trunk with test
- * coverage without depending on ongoing work of other storage engines.
- *
- * @note This rapid storage engine does not support being set as a primary
- * storage engine.
- */
 duckdb_database db;
 
 class ha_rapid : public handler {

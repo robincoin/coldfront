@@ -653,6 +653,59 @@ std::string lex_to_duckdb_sql(LEX *lex) {
     duckdb_compatible_sql.erase(pos, 1);
   }
   
+  // Quote aliases that need quoting (contain special chars like *, (), etc.)
+  // Pattern: " AS identifier" where identifier contains special characters
+  std::string upper_sql = duckdb_compatible_sql;
+  std::transform(upper_sql.begin(), upper_sql.end(), upper_sql.begin(), ::toupper);
+  
+  pos = 0;
+  while ((pos = upper_sql.find(" AS ", pos)) != std::string::npos) {
+    size_t alias_start = pos + 4; // Skip " AS "
+    
+    // Skip whitespace after AS
+    while (alias_start < duckdb_compatible_sql.length() && 
+           std::isspace(duckdb_compatible_sql[alias_start])) {
+      alias_start++;
+    }
+    
+    // Find the end of the alias (until comma, whitespace, FROM, WHERE, GROUP, ORDER, or end)
+    size_t alias_end = alias_start;
+    bool needs_quoting = false;
+    
+    while (alias_end < duckdb_compatible_sql.length()) {
+      char ch = duckdb_compatible_sql[alias_end];
+      if (ch == ',' || ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
+        break;
+      }
+      // Check if character needs quoting (special chars like *, (), etc.)
+      if (!std::isalnum(ch) && ch != '_') {
+        needs_quoting = true;
+      }
+      alias_end++;
+    }
+    
+    // If alias needs quoting and isn't already quoted, add double quotes
+    if (needs_quoting && alias_start < alias_end) {
+      std::string alias = duckdb_compatible_sql.substr(alias_start, alias_end - alias_start);
+      
+      // Check if already quoted
+      if (!(alias.front() == '"' && alias.back() == '"')) {
+        std::string quoted_alias = "\"" + alias + "\"";
+        duckdb_compatible_sql.replace(alias_start, alias_end - alias_start, quoted_alias);
+        
+        // Update upper_sql for next iteration
+        upper_sql = duckdb_compatible_sql;
+        std::transform(upper_sql.begin(), upper_sql.end(), upper_sql.begin(), ::toupper);
+        
+        pos = alias_start + quoted_alias.length();
+      } else {
+        pos = alias_end;
+      }
+    } else {
+      pos = alias_end;
+    }
+  }
+  
   // Fix implicit joins: Convert JOIN without ON clause to comma-separated table list
   // "from table1 t1 join table2 t2 join table3 t3 where ..." 
   // becomes "from table1 t1, table2 t2, table3 t3 where ..."
