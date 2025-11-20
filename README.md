@@ -17,6 +17,7 @@ You will see something like this if LD_PRELOAD is necessary:
 mysql> install plugin rapid soname 'ha_rapid.so';
 ERROR 1126 (HY000): Can't open shared library '/home/justin/mysql/8.4/lib/plugin/ha_rapid.so' (errno: 11 /home/justin/mysql/8.4/lib/plugin/ha_rapid.so: cannot allocate memory in static TLS block)
 ```
+See [the manual](https://dev.mysql.com/doc/refman/8.4/en/using-systemd.html) for how to add LD_PRELOAD to a systemd environment.
 
 # usage
 ## Load table into secondary engine
