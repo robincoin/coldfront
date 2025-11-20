@@ -9,6 +9,8 @@ compile the server as normal
 ```
 INSTALL PLUGIN rapid SONAME 'ha_rapid.so';
 ```
+## LD_PRELOAD
+On 64 bit intel/amd architectures it may be necessary to LD_PRELOAD the ha_rapid.so library because DuckDB is so large.  This problem does not appear on aarch64 machines like Apple Silicon.
 
 # usage
 ## Load table into secondary engine
