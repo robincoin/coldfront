@@ -30,7 +30,7 @@ ALTER TABLE test.t1 SECONDARY_LOAD;
 set secondary_engine_cost_threshold=0;
 
 mysql> select d_year, s_nation, p_category, sum(lo_revenue - lo_supplycost) as profit
-from lineorder
+from lineorder2
 join dim_date   on lo_orderdatekey = d_datekey
 join customer   on lo_custkey = c_customerkey
 join supplier   on lo_suppkey = s_suppkey
@@ -156,4 +156,25 @@ and (d_year = 1997 or d_year = 1998)
 |  1 | SIMPLE      | part       | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 993201 |     1.90 | Using where; Using join buffer (hash join); Using secondary engine RAPID   |
 +----+-------------+------------+------------+------+---------------+------+---------+------+--------+----------+----------------------------------------------------------------------------+
 5 rows in set, 1 warning (0.01 sec)
+```
+
+## check binlog processor (sync process) status
+```
+mysql> use test;
+Reading table information for completion of table and column names
+You can turn off this feature to get a quicker startup with -A
+
+Database changed
+mysql> alter table lineorder2 secondary_load;
+2025-11-20T10:31:35.978141Z 8 [System] [MY-015139] [Server] Execution of ALTER TABLE test.lineorder2 SECONDARY_LOAD finished. Spent 0 msec for exclusive lock acquire; 1234 msec for secondary engine operation; 6 msec for metadata update and commit.
+Query OK, 0 rows affected (1.24 sec)
+
+mysql> show status like '%rapid%';
++-------------------------------+-----------------+
+| Variable_name                 | Value           |
++-------------------------------+-----------------+
+| rapid_current_binlog_file     | ./binlog.000066 |
+| rapid_current_binlog_position | 353             |
++-------------------------------+-----------------+
+2 rows in set (0.01 sec)
 ```
