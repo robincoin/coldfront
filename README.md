@@ -1,5 +1,5 @@
 # coldfront
-Plugins and components for a MySQL Heatwave-like secondary engine duckdb implementation.  Tested in the 8.4 branch of https://github.com/mysql/mysql-server:8.4
+Plugins and components for a MySQL Heatwave-like secondary engine duckdb implementation.  Tested in the 8.4 branch of [https://github.com/mysql/mysql-server:8.4](https://github.com/mysql/mysql-server/tree/8.4)
 
 # compile
 place the rapid/ folder in the mysql-server/storage folder
